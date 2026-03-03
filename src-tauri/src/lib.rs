@@ -43,6 +43,7 @@ pub struct RepositoryInfo {
     pub what_update: String,
     pub target_dir: String,
     pub file_extension: String,
+    pub unpack: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -177,39 +178,41 @@ async fn get_latest_download_archive(window: &Window, repository_info: &Reposito
     let mut stream = response.bytes_stream();
     let mut buffer = Vec::new();
 
-    while let Some(item) = stream.next().await {
-        let chunk = item.map_err(|e| e.to_string())?;
-        buffer.extend_from_slice(&chunk);
-        downloaded += chunk.len() as u64;
+    if repository_info.unpack {
+        while let Some(item) = stream.next().await {
+            let chunk = item.map_err(|e| e.to_string())?;
+            buffer.extend_from_slice(&chunk);
+            downloaded += chunk.len() as u64;
+
+            window.emit("download-progress", ProgressPayload {
+                progress: downloaded,
+                total: total_size,
+                status: String::from("Загрузка... ".to_owned() + &repository_info.what_update),
+            }).unwrap();
+        }
 
         window.emit("download-progress", ProgressPayload {
-            progress: downloaded,
-            total: total_size,
-            status: String::from("Загрузка... ".to_owned() + &repository_info.what_update),
+            progress: 100,
+            total: 100,
+            status: String::from("Распаковка... ".to_owned() + &repository_info.what_update),
         }).unwrap();
-    }
 
-    window.emit("download-progress", ProgressPayload {
-        progress: 100,
-        total: 100,
-        status: String::from("Распаковка... ".to_owned() + &repository_info.what_update),
-    }).unwrap();
+        let reader = Cursor::new(buffer);
+        let mut archive = zip::ZipArchive::new(reader).map_err(|e| e.to_string())?;
+        
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+            let outpath = PathBuf::from(&target_dir).join(file.name());
 
-    let reader = Cursor::new(buffer);
-    let mut archive = zip::ZipArchive::new(reader).map_err(|e| e.to_string())?;
-    
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
-        let outpath = PathBuf::from(&target_dir).join(file.name());
-
-        if file.name().ends_with('/') {
-            fs::create_dir_all(&outpath).unwrap();
-        } else {
-            if let Some(p) = outpath.parent() {
-                fs::create_dir_all(p).unwrap();
+            if file.name().ends_with('/') {
+                fs::create_dir_all(&outpath).unwrap();
+            } else {
+                if let Some(p) = outpath.parent() {
+                    fs::create_dir_all(p).unwrap();
+                }
+                let mut outfile = File::create(&outpath).unwrap();
+                copy(&mut file, &mut outfile).unwrap();
             }
-            let mut outfile = File::create(&outpath).unwrap();
-            copy(&mut file, &mut outfile).unwrap();
         }
     }
 
@@ -223,12 +226,14 @@ async fn start_update(window: Window) -> Result<(), String> {
         what_update: "zapret-discord-youtube".into(),
         target_dir: "app/downloads/".into(),
         file_extension: ".zip".into(),
+        unpack: true,
     };
     let zapret_ui_repo = RepositoryInfo {
         repo: "qubicfire/zapret-ui".into(),
         what_update: "zapret-ui".into(),
         target_dir: "app/".into(),
         file_extension: ".exe".into(),
+        unpack: false,
     };
     let asset_zapret_name = get_latest_download_archive(&window, &zapret_repo).await?;
     let _ = get_latest_download_archive(&window, &zapret_ui_repo).await?;
