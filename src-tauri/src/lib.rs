@@ -178,19 +178,19 @@ async fn get_latest_download_archive(window: &Window, repository_info: &Reposito
     let mut stream = response.bytes_stream();
     let mut buffer = Vec::new();
 
+    while let Some(item) = stream.next().await {
+        let chunk = item.map_err(|e| e.to_string())?;
+        buffer.extend_from_slice(&chunk);
+        downloaded += chunk.len() as u64;
+
+        window.emit("download-progress", ProgressPayload {
+            progress: downloaded,
+            total: total_size,
+            status: String::from("Загрузка... ".to_owned() + &repository_info.what_update),
+        }).unwrap();
+    }
+
     if repository_info.unpack {
-        while let Some(item) = stream.next().await {
-            let chunk = item.map_err(|e| e.to_string())?;
-            buffer.extend_from_slice(&chunk);
-            downloaded += chunk.len() as u64;
-
-            window.emit("download-progress", ProgressPayload {
-                progress: downloaded,
-                total: total_size,
-                status: String::from("Загрузка... ".to_owned() + &repository_info.what_update),
-            }).unwrap();
-        }
-
         window.emit("download-progress", ProgressPayload {
             progress: 100,
             total: 100,
@@ -214,6 +214,18 @@ async fn get_latest_download_archive(window: &Window, repository_info: &Reposito
                 copy(&mut file, &mut outfile).unwrap();
             }
         }
+    } else {
+        let file_path = PathBuf::from(&repository_info.target_dir).join(asset_name.to_owned() + &repository_info.file_extension);
+        println!("Сохранение файла: {:?}", file_path);
+        let mut outfile = File::create(&file_path).map_err(|e| e.to_string())?;
+        let mut reader = Cursor::new(buffer);
+        std::io::copy(&mut reader, &mut outfile).map_err(|e| e.to_string())?;
+        
+        window.emit("download-progress", ProgressPayload {
+            progress: 100,
+            total: 100,
+            status: format!("Файл {} сохранен", repository_info.what_update),
+        }).unwrap();
     }
 
     Ok(asset_name.clone())
@@ -247,6 +259,7 @@ async fn start_update(window: Window) -> Result<(), String> {
     if executable_path.exists() {
         Command::new(executable_path)
             .creation_flags(0x00000008) // DETACHED_PROCESS
+            .current_dir(executable_path.parent().unwrap())
             .spawn()
             .map_err(|e| e.to_string())?;
     } else {
