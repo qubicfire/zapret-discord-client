@@ -41,6 +41,7 @@ pub struct AssetInfo {
 pub struct RepositoryInfo {
     pub repo: String,
     pub what_update: String,
+    pub target_dir: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -54,6 +55,8 @@ struct Config {
 async fn get_latest_download_url(repo: &str) -> Result<AssetInfo, String> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
     let client = reqwest::Client::new();
+
+    println!("API: {}", url);
     
     let response = client
         .get(url)
@@ -137,13 +140,13 @@ fn create_config() {
     }
 }
 
-async fn get_latest_download_archive(window: &Window, repository_info: RepositoryInfo) -> Result<String, String> {
+async fn get_latest_download_archive(window: &Window, repository_info: &RepositoryInfo) -> Result<String, String> {
     let asset_info = get_latest_download_url(&repository_info.repo).await?;
     let url = asset_info.url;
 
     println!("Найдена ссылка: {}", url);
     let asset_name = &asset_info.name.replace(".zip", "");
-    let target_dir = String::from("app/downloads/".to_owned() + &asset_name);
+    let target_dir = String::from(repository_info.target_dir.to_owned() + &asset_name);
 
     if Path::new(&target_dir).exists() {
         println!("Файл обновлён до последней версии: {}", target_dir);
@@ -153,7 +156,7 @@ async fn get_latest_download_archive(window: &Window, repository_info: Repositor
             status: String::from("Файл обновлён до последней версии: ".to_owned() + &repository_info.what_update),
         }).unwrap();
 
-        return Ok(target_dir);
+        return Ok(asset_name.to_string());
     }
 
     fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
@@ -200,9 +203,7 @@ async fn get_latest_download_archive(window: &Window, repository_info: Repositor
         }
     }
 
-    update_config(&asset_name, &target_dir);
-
-    Ok(target_dir)
+    Ok(asset_name.clone())
 }
 
 #[tauri::command]
@@ -210,16 +211,22 @@ async fn start_update(window: Window) -> Result<(), String> {
     let zapret_repo = RepositoryInfo {
         repo: "Flowseal/zapret-discord-youtube".into(),
         what_update: "zapret-discord-youtube".into(),
+        target_dir: "app/downloads/".into(),
     };
     let zapret_ui_repo = RepositoryInfo {
         repo: "qubicfire/zapret-ui".into(),
         what_update: "zapret-ui".into(),
+        target_dir: "app/".into(),
     };
-    let target_dir = get_latest_download_archive(&window, zapret_repo).await?;
+    let asset_zapret_name = get_latest_download_archive(&window, &zapret_repo).await?;
+    let _ = get_latest_download_archive(&window, &zapret_ui_repo).await?;
 
+    let target_dir = &String::from(zapret_repo.target_dir.to_owned() + &asset_zapret_name);
+    update_config(&asset_zapret_name, &target_dir);
+    println!("config updated!");
     update_resources(&target_dir)?;
 
-    /*let executable_path = Path::new("app/zapret-ui.exe");
+    let executable_path = Path::new("app/zapret-ui.exe");
     if executable_path.exists() {
         Command::new(executable_path)
             .creation_flags(0x00000008) // DETACHED_PROCESS
@@ -227,12 +234,12 @@ async fn start_update(window: Window) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     } else {
         return Err("Исполняемый файл не найден после распаковки".into());
-    }*/
+    }
 
-    //thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_secs(1));
 
     window.emit("update-finished", "Готово!").unwrap();
-    //window.close().unwrap();
+    window.close().unwrap();
     Ok(())
 }
 
