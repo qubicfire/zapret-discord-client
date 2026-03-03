@@ -42,6 +42,7 @@ pub struct RepositoryInfo {
     pub repo: String,
     pub what_update: String,
     pub target_dir: String,
+    pub file_extension: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -52,8 +53,8 @@ struct Config {
     auto_start: bool,
 }
 
-async fn get_latest_download_url(repo: &str) -> Result<AssetInfo, String> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
+async fn get_latest_download_url(repository_info: &RepositoryInfo) -> Result<AssetInfo, String> {
+    let url = format!("https://api.github.com/repos/{}/releases/latest", repository_info.repo);
     let client = reqwest::Client::new();
 
     println!("API: {}", url);
@@ -65,6 +66,15 @@ async fn get_latest_download_url(repo: &str) -> Result<AssetInfo, String> {
         .await
         .map_err(|e| e.to_string())?;
 
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        
+        eprintln!("GitHub API вернул ошибку [{}]: {}", status, error_text);
+        
+        return Err(format!("GitHub API Error ({}): {}", status, error_text));
+    }
+
     let release: GithubRelease = response
         .json()
         .await
@@ -72,8 +82,8 @@ async fn get_latest_download_url(repo: &str) -> Result<AssetInfo, String> {
 
     let asset = release.assets
         .iter()
-        .find(|a| a.name.ends_with(".zip"))
-        .ok_or("ZIP-файл не найден в релизе")?;
+        .find(|a| a.name.ends_with(&repository_info.file_extension))
+        .ok_or("Файл с расширением не найден в релизе")?;
 
     Ok(AssetInfo {
         url: asset.browser_download_url.clone(),
@@ -141,11 +151,11 @@ fn create_config() {
 }
 
 async fn get_latest_download_archive(window: &Window, repository_info: &RepositoryInfo) -> Result<String, String> {
-    let asset_info = get_latest_download_url(&repository_info.repo).await?;
+    let asset_info = get_latest_download_url(repository_info).await?;
     let url = asset_info.url;
 
     println!("Найдена ссылка: {}", url);
-    let asset_name = &asset_info.name.replace(".zip", "");
+    let asset_name = &asset_info.name.replace(&repository_info.file_extension, "");
     let target_dir = String::from(repository_info.target_dir.to_owned() + &asset_name);
 
     if Path::new(&target_dir).exists() {
@@ -212,11 +222,13 @@ async fn start_update(window: Window) -> Result<(), String> {
         repo: "Flowseal/zapret-discord-youtube".into(),
         what_update: "zapret-discord-youtube".into(),
         target_dir: "app/downloads/".into(),
+        file_extension: ".zip".into(),
     };
     let zapret_ui_repo = RepositoryInfo {
         repo: "qubicfire/zapret-ui".into(),
         what_update: "zapret-ui".into(),
         target_dir: "app/".into(),
+        file_extension: ".exe".into(),
     };
     let asset_zapret_name = get_latest_download_archive(&window, &zapret_repo).await?;
     let _ = get_latest_download_archive(&window, &zapret_ui_repo).await?;
